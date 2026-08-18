@@ -1,5 +1,5 @@
 {
-  "name": "pi-mcp-adapter",
+  "name": "@afx-team/pi-mcp-adapter",
   "version": "2.26.0",
   "description": "MCP (Model Context Protocol) adapter extension for Pi coding agent",
   "type": "module",
@@ -40,7 +40,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/nicobailon/pi-mcp-adapter.git"
+    "url": "git+https://github.com/afx-team/pi-mcp-adapter.git"
   },
   "keywords": [
     "pi-package",
@@ -60,7 +60,7 @@
     "skills": [
       "./skills"
     ],
-    "video": "https://github.com/nicobailon/pi-mcp-adapter/raw/refs/heads/main/pi-mcp.mp4"
+    "video": "https://github.com/afx-team/pi-mcp-adapter/raw/refs/heads/main/pi-mcp.mp4"
   },
   "files": [
     "cli.js",
