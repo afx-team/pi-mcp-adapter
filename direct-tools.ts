@@ -231,6 +231,29 @@ export function resolveDirectTools(
   return specs;
 }
 
+/** Resolve the complete cache-backed MCP catalog using a chosen wire name format. */
+export function resolveAllMcpTools(
+  config: McpConfig,
+  cache: MetadataCache | null,
+  prefix: ToolPrefix,
+): DirectToolSpec[] {
+  const allToolsConfig: McpConfig = {
+    ...config,
+    settings: {
+      ...config.settings,
+      directTools: true,
+      warnOnLargeDirectTools: false,
+    },
+    mcpServers: Object.fromEntries(
+      Object.entries(config.mcpServers).map(([name, definition]) => [
+        name,
+        { ...definition, directTools: true },
+      ]),
+    ),
+  };
+  return resolveDirectTools(allToolsConfig, cache, prefix);
+}
+
 export function buildProxyDescription(
   config: McpConfig,
   cache: MetadataCache | null,

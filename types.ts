@@ -457,7 +457,7 @@ export interface McpOutputGuardSettings {
 }
 
 // Settings
-export type ToolPrefix = "server" | "none" | "short" | "mcp";
+export type ToolPrefix = "server" | "none" | "short" | "mcp" | "claude";
 export type HostConfigDiscovery = "off" | "prompt" | "on";
 export type McpFooterStatus = "full" | "compact" | "off";
 
@@ -504,6 +504,8 @@ export interface McpSettings {
   idleTimeout?: number; // minutes, default 10, 0 to disable
   requestTimeoutMs?: number; // milliseconds, overrides the SDK request timeout when > 0
   directTools?: boolean;
+  /** Disable Claude Code-compatible ToolSearch deferred loading. Defaults to false. */
+  disableToolSearch?: boolean;
   /** Show the advisory when 75 or more direct tools resolve. Defaults to true. */
   warnOnLargeDirectTools?: boolean;
   /** Register the trusted MCP-only JavaScript scripting tool. Defaults to true; set false to hide it. */
@@ -683,6 +685,7 @@ export function getServerPrefix(
     return short;
   }
   if (mode === "mcp") return `mcp__${sanitizeServerPrefix(serverName)}`;
+  if (mode === "claude") return `mcp__${sanitizeServerPrefix(serverName)}_`;
   return sanitizeServerPrefix(serverName);
 }
 

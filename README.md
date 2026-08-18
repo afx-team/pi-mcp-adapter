@@ -71,26 +71,28 @@ Precedence is:
 
 `/mcp disable <server>` and `/mcp enable <server>` persist only the `disabled` field in the project-local `.pi/mcp.json`, which is the highest-precedence Pi layer. Enabling removes the project flag when lower layers are enabled, or writes `false` when needed to override a disabled lower source. This applies even when the effective server came from a shared global/project file, an imported host config, or `configPath`; the source file is never rewritten and credentials are never copied. Run `/reload` after changing the flag so registered tool surfaces are refreshed. The manual equivalent is to add `{ "disabled": true }` to a server in any normal MCP config. Supplied in-memory `createMcpAdapter({ config })` configurations are isolated and do not read or write this project override; the commands are unavailable in that mode.
 
-Servers are **lazy by default** — they won't connect until you actually call one of their tools. The adapter caches tool metadata so search and describe work without live connections.
+Servers are **lazy by default** — they won't connect until you actually call one of their tools. The adapter caches tool metadata so Claude Code-compatible tool search works without live connections. Cached MCP tools are registered with Pi but kept inactive until selected.
 
 ```
-mcp({ search: "screenshot" })
+ToolSearch({ query: "screenshot", max_results: 5 })
 ```
 ```
-chrome_devtools_take_screenshot
-  Take a screenshot of the page or element.
-
-  Parameters:
-    format (enum: "png", "jpeg", "webp") [default: "png"]
-    fullPage (boolean) - Full page instead of viewport
+Loaded tools: mcp__chrome-devtools__take_screenshot
 ```
 ```
-mcp({ tool: "chrome_devtools_take_screenshot", args: { format: "png" } })
+mcp__chrome-devtools__take_screenshot({ format: "png" })
 ```
 
-`args` can be a JSON object or a JSON string. Prefer the object form when your model handles it reliably; the string form remains supported for providers that need simpler schemas.
+On Anthropic models with tool-reference support, Pi serializes the search result as typed `tool_reference` content and sends only the selected definitions with `defer_loading: true`. Other providers use Pi's normal dynamic-tool fallback. The legacy `mcp` proxy remains available for status, auth, compatibility search, and compatibility calls.
 
-Two calls instead of 26 tools cluttering the context.
+At the start of an agent turn, the adapter publishes the currently unloaded tool names in the same hidden `<system-reminder>` form used by Claude Code. The reminder contains names only, never parameter schemas.
+
+`ToolSearch` accepts the Claude Code query forms:
+
+- `select:mcp__github__search_issues,mcp__slack__send_message` loads exact names in order.
+- `notebook jupyter` searches names, descriptions, and parameter schemas.
+- `+slack send` requires `slack` in the tool name and ranks by `send`.
+- No match returns an empty result and activates nothing.
 
 ## Config
 
@@ -225,7 +227,7 @@ In the configuration examples below, `30000` is illustrative only. If `requestTi
 | `protocolVersion` | `"legacy"` (default), `"auto"`, or `"2026-07-28"`; modern negotiation is opt-in |
 | `exposeResources` | Expose MCP resources as tools (default: true) |
 | `directTools` | `true`, `string[]`, or `false` — register tools individually instead of through proxy |
-| `toolPrefix` | Override global `settings.toolPrefix` for this server (`"server"`, `"short"`, `"none"`, or `"mcp"`) |
+| `toolPrefix` | Override global `settings.toolPrefix` for always-loaded direct tools (`"server"`, `"short"`, `"none"`, `"mcp"`, or Claude-compatible `"claude"`) |
 | `includeTools` | `string[]` of tool names or glob patterns to expose (matches original names like `get_screenshot`, generated resource names like `read_figjam`, and prefixed names like `figma_get_screenshot`) |
 | `excludeTools` | `string[]` of tool names or glob patterns to hide (applied after `includeTools`) |
 | `searchKeywords` | `{ "tool-or-glob": ["keyword", ...] }` — extra keywords that boost `mcp({ search })` ranking for matching tools; never shown to the model |
@@ -328,7 +330,7 @@ When any enabled server uses `eager` or `keep-alive`, initialization also starts
 
 | Setting | Description |
 |---------|-------------|
-| `toolPrefix` | `"server"` (default), `"short"` (strips `-mcp` suffix), `"none"`, or `"mcp"` (prefixes with `mcp__`, using server-mode normalization). Per-server `toolPrefix` overrides this for that server. |
+| `toolPrefix` | `"server"` (default), `"short"` (strips `-mcp` suffix), `"none"`, `"mcp"` (prefixes with `mcp__`), or `"claude"` (`mcp__server__tool`). Per-server `toolPrefix` overrides this for always-loaded direct tools. Deferred ToolSearch tools always use the Claude-compatible form. |
 | `idleTimeout` | Global idle timeout in minutes (default: 10, 0 to disable) |
 | `requestTimeoutMs` | Global request timeout in milliseconds for live MCP calls (if omitted or `<= 0`, the MCP SDK default timeout is used) |
 | `showStatusIcon` | Show the plug icon in MCP status and connection text (default: `true`). Set to `false` for plain `MCP: ...` text. |
@@ -346,6 +348,7 @@ When any enabled server uses `eager` or `keep-alive`, initialization also starts
 | `freezeDirectTools` | Keep direct-tool registration stable after the initial sync so automatic reconnects and list-change notifications do not rebuild the system prompt. Use `mcp({ connect: "server" })` or `/mcp reconnect <server>` to refresh deliberately. Default: false. |
 | `scriptMode` | Register the MCP-only `mcpScript` plain-JavaScript tool (default: true). Set to `false` to hide it. |
 | `disableProxyTool` | Hide the `mcp` proxy tool once configured direct tools are fully available from cache. |
+| `disableToolSearch` | Disable the default Claude Code-compatible `ToolSearch` deferred-loading surface. Legacy proxy/direct-tool behavior remains available. |
 | `autoAuth` | Auto-run OAuth on `connect`/tool calls when a server needs auth, then retry once (default: false). |
 | `sampling` | Allow MCP servers to sample through Pi models, honoring `modelPreferences.hints` before current/default fallback (default: true when UI approval is available). |
 | `samplingAutoApprove` | Skip sampling confirmation prompts. Required for sampling in non-UI sessions (default: false). |

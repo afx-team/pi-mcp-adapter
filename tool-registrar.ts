@@ -1,6 +1,7 @@
 // tool-registrar.ts - MCP content transformation
-// NOTE: Tools are NOT registered with Pi - only the unified `mcp` proxy tool is registered.
-// This keeps the LLM context small (1 tool instead of 100s).
+// MCP tools may be registered with Pi as always-loaded direct tools or as
+// inactive ToolSearch catalog entries. Registration alone does not put a
+// deferred tool in the model context; Pi activates it after a search result.
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -39,6 +39,7 @@ describe("formatToolName", () => {
     expect(formatToolName("namespace.tool", "demo-mcp", "short")).toBe("demo_namespace_tool");
     expect(formatToolName("namespace.tool", "demo", "none")).toBe("namespace_tool");
     expect(formatToolName("namespace.tool", "demo-mcp", "mcp")).toBe("mcp__demo-mcp_namespace_tool");
+    expect(formatToolName("namespace.tool", "demo-mcp", "claude")).toBe("mcp__demo-mcp__namespace_tool");
   });
 
   it("sanitizes server names in live tool and resource metadata", () => {
