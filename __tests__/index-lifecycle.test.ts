@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
   createDirectToolExecutor: vi.fn(() => vi.fn()),
   getMissingConfiguredDirectToolServers: vi.fn(() => []),
   resolveDirectTools: vi.fn(() => []),
+  resolveAllMcpTools: vi.fn(() => []),
   showStatus: vi.fn(),
   showTools: vi.fn(),
   showPrompts: vi.fn(),
@@ -70,6 +71,7 @@ vi.mock("../direct-tools.ts", () => ({
   createDirectToolExecutor: mocks.createDirectToolExecutor,
   getMissingConfiguredDirectToolServers: mocks.getMissingConfiguredDirectToolServers,
   resolveDirectTools: mocks.resolveDirectTools,
+  resolveAllMcpTools: mocks.resolveAllMcpTools,
 }));
 
 vi.mock("../commands.ts", () => ({
@@ -178,6 +180,7 @@ describe("mcpAdapter session lifecycle", () => {
     mocks.createDirectToolExecutor.mockReturnValue(vi.fn());
     mocks.getMissingConfiguredDirectToolServers.mockReturnValue([]);
     mocks.resolveDirectTools.mockReturnValue([]);
+    mocks.resolveAllMcpTools.mockReturnValue([]);
     mocks.getConfigPathFromArgv.mockReturnValue(undefined);
     mocks.normalizeDirectToolInputSchema.mockImplementation((schema: unknown) => schema && typeof schema === "object" && !Array.isArray(schema)
       ? Object.fromEntries(Object.entries(schema).filter(([key]) => key !== "$schema" && key !== "additionalProperties"))
@@ -378,6 +381,68 @@ describe("mcpAdapter session lifecycle", () => {
     expect(directTool.parameters).not.toHaveProperty("additionalProperties");
   });
 
+  it("registers deferred MCP tools inactive and loads them additively through ToolSearch", async () => {
+    const deferredSpec = {
+      serverName: "browser",
+      originalName: "navigate",
+      prefixedName: "mcp__browser__navigate",
+      description: "Navigate the browser",
+      inputSchema: { type: "object", properties: { url: { type: "string" } } },
+    };
+    mocks.loadMcpConfig.mockReturnValue({
+      mcpServers: { browser: { command: "browser-mcp" } },
+    });
+    mocks.resolveAllMcpTools.mockReturnValue([deferredSpec]);
+    const state = createState();
+    state.config = { mcpServers: { browser: { command: "browser-mcp" } } };
+    mocks.initializeMcp.mockResolvedValue(state);
+
+    const { default: mcpAdapter } = await import("../index.ts");
+    const { api, handlers } = createPi();
+    mcpAdapter(api);
+
+    const deferredTool = api.registerTool.mock.calls
+      .find((call: any[]) => call[0].name === deferredSpec.prefixedName)?.[0];
+    expect(deferredTool).toMatchObject({
+      name: "mcp__browser__navigate",
+      description: "Navigate the browser",
+    });
+    expect(deferredTool.promptSnippet).toBeUndefined();
+
+    await handlers.get("session_start")?.({}, { hasUI: false });
+    const reminder = await handlers.get("before_agent_start")?.({}, { hasUI: false });
+    expect(reminder).toEqual({
+      message: expect.objectContaining({
+        customType: "pi-mcp-adapter:deferred-tools",
+        display: false,
+        content: expect.stringContaining("mcp__browser__navigate"),
+      }),
+    });
+    const toolSearch = api.registerTool.mock.calls
+      .find((call: any[]) => call[0].name === "ToolSearch")?.[0];
+    expect(toolSearch.parameters.required).toEqual(["query", "max_results"]);
+
+    api.setActiveTools.mockClear();
+    const result = await toolSearch.execute(
+      "toolu_search",
+      { query: "select:mcp__browser__navigate", max_results: 5 },
+      undefined,
+    );
+
+    expect(api.setActiveTools).toHaveBeenCalledWith([
+      "bash",
+      "mcp",
+      "demo_search",
+      "ToolSearch",
+      "mcp__browser__navigate",
+    ]);
+    expect(result.details).toEqual({
+      query: "select:mcp__browser__navigate",
+      matches: ["mcp__browser__navigate"],
+      total_mcp_tools: 1,
+    });
+  });
+
   it("waits for env-selected cold-cache tools before session startup completes", async () => {
     process.env.MCP_DIRECT_TOOLS = "demo/search";
     const config = {
@@ -489,7 +554,7 @@ describe("mcpAdapter session lifecycle", () => {
     await commandDef.handler("reconnect demo", { hasUI: false });
 
     expect(api.unregisterTool).toHaveBeenCalledWith("demo_search");
-    expect(api.setActiveTools).toHaveBeenCalledWith(["bash", "mcp"]);
+    expect(api.setActiveTools).toHaveBeenCalledWith(["bash", "mcp", "ToolSearch"]);
     expect(api.registerTool).toHaveBeenCalledWith(expect.objectContaining({ name: "mcp" }));
   });
 
@@ -532,7 +597,7 @@ describe("mcpAdapter session lifecycle", () => {
     await commandDef.handler("reconnect demo", { hasUI: false });
 
     expect(api.unregisterTool).toBeUndefined();
-    expect(api.setActiveTools).toHaveBeenCalledWith(["bash", "mcp"]);
+    expect(api.setActiveTools).toHaveBeenCalledWith(["bash", "mcp", "ToolSearch"]);
 
     await commandDef.handler("reconnect demo", { hasUI: false });
 
@@ -540,7 +605,7 @@ describe("mcpAdapter session lifecycle", () => {
       name: "demo_search",
       description: "Search demo v2",
     }));
-    expect(api.setActiveTools).toHaveBeenCalledWith(["bash", "mcp", "demo_search"]);
+    expect(api.setActiveTools).toHaveBeenCalledWith(["bash", "mcp", "ToolSearch", "demo_search"]);
   });
 
   it("skips the proxy tool once direct tools are fully available", async () => {

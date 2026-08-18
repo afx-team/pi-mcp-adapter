@@ -96,6 +96,7 @@
     "sampling-handler.ts",
     "elicitation-handler.ts",
     "tool-registrar.ts",
+    "tool-search.ts",
     "tool-result-renderer.ts",
     "mcp-output-guard.ts",
     "mcp-code.ts",

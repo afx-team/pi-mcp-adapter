@@ -6,7 +6,7 @@ import { Type } from "typebox";
 import type { TSchema } from "typebox";
 import { showStatus, showTools, showPrompts, reconnectServer, reconnectServers, authenticateServer, logoutServer, openMcpAuthPanel, openMcpPanel, openMcpSetup } from "./commands.ts";
 import { cloneMcpConfig, loadMcpConfig, writeProjectServerDisabledOverride } from "./config.ts";
-import { buildProxyDescription, createDirectToolExecutor, getMissingConfiguredDirectToolServers, resolveDirectTools } from "./direct-tools.ts";
+import { buildProxyDescription, createDirectToolExecutor, getMissingConfiguredDirectToolServers, resolveAllMcpTools, resolveDirectTools } from "./direct-tools.ts";
 import { flushMetadataCache, initializeMcp, updateStatusBar } from "./init.ts";
 import { loadMetadataCache, type MetadataCache } from "./metadata-cache.ts";
 import { createPromptCommand, resolveCachedPrompts } from "./prompts.ts";
@@ -20,6 +20,7 @@ import { createMcpRuntimeOwner, createOwnedUi, isAbortError, type McpRuntimeOwne
 import { publishMcpStatusShutdown } from "./mcp-status.ts";
 import { runMcpScript } from "./mcp-code.ts";
 import { cleanupMaterializedBinaryResources } from "./tool-registrar.ts";
+import { buildDeferredToolsReminder, DEFAULT_TOOL_SEARCH_RESULTS, searchDeferredTools, TOOL_SEARCH_DESCRIPTION, TOOL_SEARCH_NAME } from "./tool-search.ts";
 
 export type { McpAdapterOptions } from "./types.ts";
 export {
@@ -62,6 +63,13 @@ function optionalNumber(options: { minimum?: number; description: string }): TSc
   const number = (Type as { Number?: (opts: typeof options) => TSchema }).Number;
   return typeof number === "function"
     ? Type.Optional(number(options))
+    : ({ type: "number", ...options } as unknown as TSchema);
+}
+
+function requiredNumber(options: { minimum?: number; maximum?: number; default?: number; description: string }): TSchema {
+  const number = (Type as { Number?: (opts: typeof options) => TSchema }).Number;
+  return typeof number === "function"
+    ? number(options)
     : ({ type: "number", ...options } as unknown as TSchema);
 }
 
@@ -123,6 +131,10 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
   const envRaw = process.env.MCP_DIRECT_TOOLS;
   const envDirectToolOverride = envRaw?.split(",").map(s => s.trim()).filter(Boolean);
   const registeredDirectTools = new Map<string, string>();
+  const registeredDeferredTools = new Map<string, string>();
+  const deferredToolCatalog = new Map<string, DirectToolSpec>();
+  const loadedDeferredTools = new Set<string>();
+  let lastDeferredReminderFingerprint: string | undefined;
   const fallbackDeactivatedTools = new Set<string>();
   const toolRenderOptions = resolveMcpToolRenderOptions(earlyConfig.settings);
   const toolRenderShell = toolRenderOptions.resultRendering === "compact" ? "self" : "default";
@@ -153,18 +165,24 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
     });
   }
 
-  function registerDirectTool(spec: DirectToolSpec): void {
+  function registerMcpTool(spec: DirectToolSpec, alwaysLoad: boolean): void {
     (pi.registerTool as (tool: unknown) => unknown)({
       name: spec.prefixedName,
       label: `MCP: ${spec.originalName}`,
       description: spec.description || "(no description)",
-      promptSnippet: truncateAtWord(spec.description, 100) || `MCP tool from ${spec.serverName}`,
+      ...(alwaysLoad
+        ? { promptSnippet: truncateAtWord(spec.description, 100) || `MCP tool from ${spec.serverName}` }
+        : {}),
       parameters: toToolParameters(normalizeDirectToolInputSchema(spec.inputSchema)),
       execute: createDirectToolExecutor(() => state, () => initPromise, spec),
       renderShell: toolRenderShell,
       renderCall: createMcpDirectToolCallRenderer(spec.prefixedName, toolRenderOptions),
       renderResult: renderMcpToolResult,
     });
+  }
+
+  function registerDirectTool(spec: DirectToolSpec): void {
+    registerMcpTool(spec, true);
   }
 
   function resolveCurrentDirectTools(config: McpConfig, cache: MetadataCache | null): DirectToolSpec[] {
@@ -200,6 +218,15 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
       pi.setActiveTools(nextActiveTools);
     }
     return unregistered;
+  }
+
+  function removeToolsFromActiveSet(toolNames: Iterable<string>): void {
+    const remove = new Set(toolNames);
+    if (remove.size === 0) return;
+    const activeTools = getActiveToolsIfReady();
+    if (!activeTools) return;
+    const nextActiveTools = activeTools.filter((name) => !remove.has(name));
+    if (nextActiveTools.length !== activeTools.length) pi.setActiveTools(nextActiveTools);
   }
 
   function syncDirectTools(config: McpConfig, cache: MetadataCache | null): {
@@ -240,6 +267,55 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
     return { specs, added, updated, deactivated };
   }
 
+  function syncDeferredTools(config: McpConfig, cache: MetadataCache | null, directSpecs: DirectToolSpec[]): {
+    added: string[];
+    updated: string[];
+    deactivated: string[];
+  } {
+    const directIdentities = new Set(directSpecs.map((spec) => `${spec.serverName}\0${spec.originalName}`));
+    const specs = config.settings?.disableToolSearch === true
+      ? []
+      : resolveAllMcpTools(config, cache, "claude")
+        .filter((spec) => !directIdentities.has(`${spec.serverName}\0${spec.originalName}`));
+    const nextNames = new Set(specs.map((spec) => spec.prefixedName));
+    const added: string[] = [];
+    const updated: string[] = [];
+    const deactivated: string[] = [];
+
+    deferredToolCatalog.clear();
+    for (const spec of specs) {
+      deferredToolCatalog.set(spec.prefixedName, spec);
+      const fingerprint = directToolFingerprint(spec);
+      const previous = registeredDeferredTools.get(spec.prefixedName);
+      if (previous !== fingerprint) {
+        registerMcpTool(spec, false);
+        registeredDeferredTools.set(spec.prefixedName, fingerprint);
+        (previous ? updated : added).push(spec.prefixedName);
+      }
+    }
+
+    for (const toolName of [...registeredDeferredTools.keys()]) {
+      if (nextNames.has(toolName)) continue;
+      registeredDeferredTools.delete(toolName);
+      loadedDeferredTools.delete(toolName);
+      deactivated.push(toolName);
+    }
+
+    // registerTool() makes a new runtime tool active. Deferred tools remain
+    // inactive until ToolSearch loads them; previously loaded tools stay active.
+    removeToolsFromActiveSet(specs
+      .map((spec) => spec.prefixedName)
+      .filter((name) => !loadedDeferredTools.has(name)));
+    // A tool can move from deferred to always-loaded with the same Claude-style
+    // name. In that case registerDirectTool() already replaced its definition;
+    // do not unregister the newly installed direct tool.
+    deactivateTools(deactivated.filter((name) => !registeredDirectTools.has(name)));
+    if (added.length + updated.length + deactivated.length > 0) {
+      lastDeferredReminderFingerprint = undefined;
+    }
+    return { added, updated, deactivated };
+  }
+
   function applyDirectToolConfigChanges(changes: Map<string, true | string[] | false>): void {
     if (!state) return;
     for (const [serverName, value] of changes) {
@@ -253,11 +329,13 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
     const config = state?.config ?? earlyConfig;
     const cache = loadMetadataCache();
     const result = syncDirectTools(config, cache);
+    const deferredResult = syncDeferredTools(config, cache, result.specs);
     syncProxyTool(config, cache, result.specs);
-    const changed = result.added.length + result.updated.length + result.deactivated.length;
+    const changed = result.added.length + result.updated.length + result.deactivated.length
+      + deferredResult.added.length + deferredResult.updated.length + deferredResult.deactivated.length;
     if (changed > 0 && ctx?.hasUI) {
       ctx.ui.notify(
-        `MCP: direct tools refreshed (+${result.added.length}, ~${result.updated.length}, -${result.deactivated.length})`,
+        `MCP: tool surface refreshed (+${result.added.length + deferredResult.added.length}, ~${result.updated.length + deferredResult.updated.length}, -${result.deactivated.length + deferredResult.deactivated.length})`,
         "info",
       );
     }
@@ -318,7 +396,9 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
         if (state !== nextState || !owner.isActive()) return;
         syncPromptCommands();
         if (directToolsFrozen) {
-          logger.debug(`MCP: metadata update for ${_serverName} (${_reason}) skipped — directTools frozen`);
+          const cache = loadMetadataCache();
+          syncDeferredTools(nextState.config, cache, resolveCurrentDirectTools(nextState.config, cache));
+          logger.debug(`MCP: metadata update for ${_serverName} (${_reason}) refreshed deferred catalog — directTools frozen`);
           return;
         }
         syncToolSurface(ctx);
@@ -378,6 +458,13 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    loadedDeferredTools.clear();
+    lastDeferredReminderFingerprint = undefined;
+    removeToolsFromActiveSet(registeredDeferredTools.keys());
+    const activeAtStart = getActiveToolsIfReady();
+    if (activeAtStart && earlyConfig.settings?.disableToolSearch !== true && !activeAtStart.includes(TOOL_SEARCH_NAME)) {
+      pi.setActiveTools([...activeAtStart, TOOL_SEARCH_NAME]);
+    }
     const generation = ++lifecycleGeneration;
     const previousState = state;
     const previousOwner = currentOwner;
@@ -418,6 +505,8 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
   });
 
   pi.on("session_shutdown", async () => {
+    loadedDeferredTools.clear();
+    lastDeferredReminderFingerprint = undefined;
     ++lifecycleGeneration;
     const currentState = state;
     const owner = currentOwner;
@@ -443,6 +532,24 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
 
   // Re-flag returned MCP tool failures so pi registers them as errors (see toolErrorOverride).
   pi.on("tool_result", (event) => toolErrorOverride(event.details));
+
+  pi.on("before_agent_start", () => {
+    if (earlyConfig.settings?.disableToolSearch === true) return;
+    const names = [...deferredToolCatalog.keys()]
+      .filter((name) => !loadedDeferredTools.has(name))
+      .sort((a, b) => a.localeCompare(b));
+    if (names.length === 0) return;
+    const fingerprint = names.join("\0");
+    if (fingerprint === lastDeferredReminderFingerprint) return;
+    lastDeferredReminderFingerprint = fingerprint;
+    return {
+      message: {
+        customType: "pi-mcp-adapter:deferred-tools",
+        content: buildDeferredToolsReminder(names),
+        display: false,
+      },
+    };
+  });
 
   pi.registerCommand("mcp", {
     description: "Show MCP server status",
@@ -693,6 +800,79 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
     });
   }
 
+  if (earlyConfig.settings?.disableToolSearch !== true) {
+    (pi.registerTool as (tool: unknown) => unknown)({
+      name: TOOL_SEARCH_NAME,
+      label: "Tool Search",
+      description: TOOL_SEARCH_DESCRIPTION,
+      promptSnippet: "Load deferred MCP tools by exact name or capability search",
+      parameters: Type.Object({
+        query: Type.String({ description: "Search query, +required-name query, or select:ToolA,ToolB" }),
+        max_results: requiredNumber({
+          minimum: 1,
+          maximum: 100,
+          default: DEFAULT_TOOL_SEARCH_RESULTS,
+          description: "Maximum number of matching tools to load (default: 5)",
+        }),
+      }),
+      async execute(_toolCallId: string, params: { query: string; max_results: number }, signal: AbortSignal | undefined) {
+        const executeOwner = currentOwner;
+        if (!state && initPromise) {
+          try {
+            const initialized = await awaitWithTimeout(initPromise, INIT_WAIT_TIMEOUT_MS);
+            if (initialized === INIT_WAIT_TIMED_OUT) {
+              return {
+                content: [{ type: "text" as const, text: "MCP initialization is still in progress. Try again shortly." }],
+                details: { query: params.query, matches: [], error: "init_timeout" },
+              };
+            }
+            executeOwner?.throwIfInactive();
+            state = initialized;
+          } catch (error) {
+            if (executeOwner && isAbortError(error, executeOwner.signal)) throw error;
+            const message = error instanceof Error ? error.message : String(error);
+            return {
+              content: [{ type: "text" as const, text: `MCP initialization failed: ${message}` }],
+              details: { query: params.query, matches: [], error: "init_failed", message },
+            };
+          }
+        }
+        if (signal?.aborted) throw signal.reason;
+
+        const matches = searchDeferredTools(
+          [...deferredToolCatalog.values()],
+          params.query,
+          params.max_results ?? DEFAULT_TOOL_SEARCH_RESULTS,
+        );
+        const active = pi.getActiveTools();
+        const activeSet = new Set(active);
+        const added = matches.map((match) => match.name).filter((name) => !activeSet.has(name));
+        for (const match of matches) loadedDeferredTools.add(match.name);
+        if (added.length > 0) {
+          // Pi records a purely additive set change as addedToolNames. Its
+          // Anthropic adapter then emits typed tool_reference blocks and sends
+          // only these definitions with defer_loading:true, matching Claude Code.
+          pi.setActiveTools([...active, ...added]);
+        }
+
+        const names = matches.map((match) => match.name);
+        return {
+          content: [{
+            type: "text" as const,
+            text: names.length > 0
+              ? `Loaded tools: ${names.join(", ")}`
+              : `No deferred tools found for: ${params.query}`,
+          }],
+          details: {
+            query: params.query,
+            matches: names,
+            total_mcp_tools: deferredToolCatalog.size,
+          },
+        };
+      },
+    });
+  }
+
   function registerProxyTool(description: string): void {
     (pi.registerTool as (tool: unknown) => unknown)({
       name: "mcp",
@@ -902,6 +1082,7 @@ function installMcpAdapter(pi: ExtensionAPI, options: McpAdapterOptions) {
   }
 
   const initialDirectTools = syncDirectTools(earlyConfig, earlyCache).specs;
+  syncDeferredTools(earlyConfig, earlyCache, initialDirectTools);
   syncProxyTool(earlyConfig, earlyCache, initialDirectTools);
   startLoadTimeInitialization();
 }

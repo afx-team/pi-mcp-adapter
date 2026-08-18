@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Added Claude Code-compatible `ToolSearch` deferred loading. Cached MCP tools stay out of the initial active tool set, search results activate matching `mcp__server__tool` definitions additively, and Pi emits native `tool_reference`/`defer_loading` protocol data on supported providers.
+
 ### Fixed
 - Recovered MCP gateway requests nested inside proxy `args` instead of silently showing status, and now rejects invalid nested gateway requests with guidance. Thanks to [@ibrmora](https://github.com/ibrmora) for #363.
 
