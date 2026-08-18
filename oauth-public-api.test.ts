@@ -11,7 +11,7 @@ const {
   getMcpOAuthTokensForUrl,
   inspectMcpOAuthTokensForUrl,
   updateMcpOAuthTokensForUrl,
-} = await import("pi-mcp-adapter/oauth");
+} = await import("@afx-team/pi-mcp-adapter/oauth");
 const {
   getAuthForUrl,
   resetTestAuthSecretStore,

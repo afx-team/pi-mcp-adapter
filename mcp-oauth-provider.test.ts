@@ -115,7 +115,7 @@ describe("McpOAuthProvider", () => {
 
       assert.deepStrictEqual(metadata.redirect_uris, ["http://localhost:19876/callback"])
       assert.strictEqual(metadata.client_name, "Pi Coding Agent")
-      assert.strictEqual(metadata.client_uri, "https://github.com/nicobailon/pi-mcp-adapter")
+      assert.strictEqual(metadata.client_uri, "https://github.com/afx-team/pi-mcp-adapter")
       assert.deepStrictEqual(metadata.grant_types, ["authorization_code", "refresh_token"])
       assert.deepStrictEqual(metadata.response_types, ["code"])
       assert.strictEqual(metadata.token_endpoint_auth_method, "none")

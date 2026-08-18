@@ -59,7 +59,7 @@ function defaultClientName(): string {
 function defaultClientUri(): string | undefined {
   const declared = getAppClientUri()
   if (declared) return declared
-  return getAppName() === "pi" ? "https://github.com/nicobailon/pi-mcp-adapter" : undefined
+  return getAppName() === "pi" ? "https://github.com/afx-team/pi-mcp-adapter" : undefined
 }
 
 type IssuerBoundClientInformation = OAuthClientInformationMixed & { issuer?: string }

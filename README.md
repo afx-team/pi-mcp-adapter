@@ -19,7 +19,7 @@ But the MCP ecosystem has useful stuff - databases, browsers, APIs. This adapter
 ## Install
 
 ```bash
-pi install npm:pi-mcp-adapter
+pi install npm:@afx-team/pi-mcp-adapter
 ```
 
 Restart Pi after installation.
@@ -133,7 +133,7 @@ Agent Plugins is a portable package format. Native Pi MCP config remains `.mcp.j
 Use `createMcpAdapter` when an SDK or server integration already owns its MCP configuration:
 
 ```ts
-import { createMcpAdapter } from "pi-mcp-adapter";
+import { createMcpAdapter } from "@afx-team/pi-mcp-adapter";
 
 const extension = createMcpAdapter({
   config: {
@@ -155,10 +155,10 @@ A supplied `config` is a complete, isolated snapshot. It is not merged with file
 
 With `configPath` and no `config`, the adapter keeps normal file merge behavior, and that path takes precedence over argv and `--mcp-config`. The default export keeps the normal file-based behavior. OAuth credentials are stored in the operating system credential store and keyed by the configured server name; URL binding prevents credentials from being accepted for a different server URL. `settings.oauthDir` and `MCP_OAUTH_DIR` are used only as legacy plaintext import locations for older `tokens.json` files, not as credential namespaces. CSRF state and PKCE verifiers are flow-local, so concurrent authorization flows do not share transient secrets.
 
-Cooperating Pi extensions can use `pi-mcp-adapter/oauth` to reuse URL-bound OAuth tokens without deep-importing private files:
+Cooperating Pi extensions can use `@afx-team/pi-mcp-adapter/oauth` to reuse URL-bound OAuth tokens without deep-importing private files:
 
 ```ts
-import { getMcpOAuthTokensForUrl, updateMcpOAuthTokensForUrl } from "pi-mcp-adapter/oauth";
+import { getMcpOAuthTokensForUrl, updateMcpOAuthTokensForUrl } from "@afx-team/pi-mcp-adapter/oauth";
 
 const tokens = await getMcpOAuthTokensForUrl("jira", "https://jira.example.com/mcp");
 updateMcpOAuthTokensForUrl("jira", "https://jira.example.com/mcp", { accessToken: "..." });
@@ -171,7 +171,7 @@ The public subpath exposes only token read/update helpers plus a status helper. 
 Extensions can subscribe to the adapter's versioned shared event-bus channel instead of parsing `/mcp` or `mcp({})` output:
 
 ```ts
-import { MCP_STATUS_EVENT, type McpStatusSnapshot } from "pi-mcp-adapter";
+import { MCP_STATUS_EVENT, type McpStatusSnapshot } from "@afx-team/pi-mcp-adapter";
 
 pi.events.on(MCP_STATUS_EVENT, (snapshot) => {
   const status = snapshot as McpStatusSnapshot;
@@ -382,7 +382,7 @@ Permission extensions can broker these decisions by listening on `pi-mcp-adapter
 import {
   MCP_TOOL_APPROVAL_REQUEST_EVENT,
   type McpToolApprovalRequest,
-} from "pi-mcp-adapter";
+} from "@afx-team/pi-mcp-adapter";
 
 pi.events.on(MCP_TOOL_APPROVAL_REQUEST_EVENT, (request: McpToolApprovalRequest) => {
   request.claim(async () => {
@@ -423,7 +423,7 @@ The bundled `mcp-scripting` skill is a separate Pi package resource. To hide tha
 ```json
 {
   "packages": [
-    { "source": "npm:pi-mcp-adapter", "skills": [] }
+    { "source": "npm:@afx-team/pi-mcp-adapter", "skills": [] }
   ]
 }
 ```
